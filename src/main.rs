@@ -1,6 +1,3 @@
-extern crate i3ipc;
-extern crate xcb;
-
 use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
