@@ -1,23 +1,16 @@
-#[macro_use]
-extern crate serde_derive;
-
-extern crate clap;
 extern crate i3ipc;
-extern crate serde;
-extern crate serde_json;
 extern crate xcb;
 
 use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 
-use clap::{App, Arg, SubCommand};
 use i3ipc::event::inner::WindowChange;
 use i3ipc::event::Event;
 use i3ipc::{I3Connection, I3EventListener, Subscription};
@@ -28,11 +21,7 @@ static BUFFER_SIZE: usize = 100;
 
 const SOCKET_PATH_PROP: &str = "_I3_ALTERNATE_FOCUS_SOCKET";
 
-/// Commands sent for client-server interfacing
-#[derive(Serialize, Deserialize, Debug)]
-enum Cmd {
-    SwitchTo(usize),
-}
+const SWITCH_COMMAND: &[u8] = b"switch";
 
 fn focus_nth(windows: &VecDeque<i64>, n: usize) -> Result<(), Box<dyn Error>> {
     let mut conn = I3Connection::connect().unwrap();
@@ -83,17 +72,21 @@ fn cmd_server(windows: Arc<Mutex<VecDeque<i64>>>) {
     let listener = UnixListener::bind(socket).unwrap();
 
     for stream in listener.incoming() {
-        if let Ok(stream) = stream {
-            let winc = Arc::clone(&windows);
+        if let Ok(mut stream) = stream {
+            let windows = windows.clone();
 
             thread::spawn(move || {
-                let cmd = serde_json::from_reader::<_, Cmd>(stream);
-
-                if let Ok(Cmd::SwitchTo(n)) = cmd {
-                    let winc = winc.lock().unwrap();
-
-                    // This can fail, that's fine
-                    focus_nth(&winc, n).ok();
+                for line in BufReader::new(stream.try_clone().unwrap()).lines() {
+                    match line {
+                        Ok(line) if line.as_bytes() == SWITCH_COMMAND => {
+                            let winc = windows.lock().unwrap();
+                            let _ = focus_nth(&winc, 1);
+                            let _ = stream.write_all(b"Done\n");
+                        }
+                        _ => {
+                            let _ = stream.write_all(b"Invalid command\n");
+                        }
+                    }
                 }
             });
         }
@@ -154,44 +147,23 @@ fn focus_server() {
     }
 }
 
-fn focus_client(nth_window: usize) {
+fn focus_client() {
     let socket_path = xprop::get(SOCKET_PATH_PROP).expect("Get xprop");
     let mut stream = UnixStream::connect(socket_path).unwrap();
 
-    // Just send a command to the server
-    serde_json::to_vec(&Cmd::SwitchTo(nth_window))
-        .map(move |b| stream.write_all(b.as_slice()))
-        .ok();
+    stream.write_all(SWITCH_COMMAND).expect("Write to socket");
 }
 
 fn main() {
-    let matches = App::new("i3-focus-last")
-        .subcommand(SubCommand::with_name("server").about("Run in server mode"))
-        .version(env!("CARGO_PKG_VERSION"))
-        .arg(
-            Arg::with_name("nth_window")
-                .short("n")
-                .value_name("N")
-                .help("nth window to focus")
-                .default_value("1")
-                .validator(|v| {
-                    v.parse::<usize>()
-                        .map_err(|e| String::from(e.description()))
-                        .and_then(|v| {
-                            if v > 0 && v <= BUFFER_SIZE {
-                                Ok(v)
-                            } else {
-                                Err(String::from("invalid n"))
-                            }
-                        })
-                        .map(|_| ())
-                }),
-        )
-        .get_matches();
-
-    if matches.subcommand_matches("server").is_some() {
-        focus_server();
-    } else {
-        focus_client(matches.value_of("nth_window").unwrap().parse().unwrap());
+    match env::args().skip(1).next() {
+        Some(arg) if arg == "server" => {
+            focus_server();
+        }
+        Some(arg) if arg == "switch" => {
+            focus_client();
+        }
+        _ => {
+            eprintln!("Expected argument: server or switch");
+        }
     }
 }
