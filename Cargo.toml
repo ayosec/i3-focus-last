@@ -1,10 +1,10 @@
 [package]
-name = "i3-focus-last"
-version = "0.3.1"
-authors = ["lbonn"]
+name = "i3-alternate-focus"
+version = "0.1.0"
+authors = ["lbonn", "ayosec"]
 description = "Focus last window on i3"
 license = "MIT"
-repository = "https://github.com/lbonn/i3-focus-last"
+repository = "https://github.com/ayosec/i3-focus-last"
 edition = "2018"
 
 [dependencies]

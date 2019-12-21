@@ -1,15 +1,6 @@
-i3-focus-last
-=============
+i3-alternate-focus
+==================
 
-[![Crate](https://meritbadge.herokuapp.com/i3-focus-last)](https://crates.io/crates/i3-focus-last)
+Fork from <https://github.com/lbonn/i3-focus-last>.
 
-Another implementation of this classic (and useful) example of i3 ipc use.
-
-Works on reasonable versions of i3 and sway >= 1.2.
-
-Done in [rust](https://www.rust-lang.org):
-
-* for fun!
-* it's compiled, so we won't suffer from the overhead of starting a new
-  interpreter for each client (the python version I used was sluggish at
-  times, for this reason)
+The socket to send the *switch* command is now stored in a property of the root window, and it is stored in `$XDG_RUNTIME_DIR/i3-alternate-focus.$PID.$TIMESTAMP.sock`. Thus, we can have multiple instances of i3 in the same machine.
