@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
+use std::io;
 use std::io::{BufRead, BufReader, Write};
+use std::mem;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use i3ipc::event::inner::WindowChange;
 use i3ipc::event::Event;
@@ -14,19 +16,41 @@ use i3ipc::{I3Connection, I3EventListener, Subscription};
 
 mod xprop;
 
+/// Min. time with focus required to keep a window in the queue.
+const MIN_FOCUS: Duration = Duration::from_secs(2);
+
 static BUFFER_SIZE: usize = 100;
 
 const SOCKET_PATH_PROP: &str = "_I3_ALTERNATE_FOCUS_SOCKET";
 
 const SWITCH_COMMAND: &[u8] = b"switch";
+const DEBUG_COMMAND: &[u8] = b"debug";
 
-fn focus_nth(windows: &VecDeque<i64>, n: usize) -> Result<(), Box<dyn Error>> {
+#[derive(Debug)]
+struct Window {
+    id: i64,
+    just_switched: bool,
+    focused: Instant,
+}
+
+impl Window {
+    fn new(id: i64) -> Window {
+        Window {
+            id,
+            just_switched: false,
+            focused: Instant::now(),
+        }
+    }
+}
+
+fn focus_nth(windows: &VecDeque<Window>, n: usize) -> Result<(), Box<dyn Error>> {
     let mut conn = I3Connection::connect().unwrap();
     let mut k = n;
 
     // Start from the nth window and try to change focus until it succeeds
     // (so that it skips windows which no longer exist)
-    while let Some(wid) = windows.get(k) {
+    while let Some(win) = windows.get(k) {
+        let wid = win.id;
         let r = conn.run_command(format!("[con_id={}] focus", wid).as_str())?;
 
         if let Some(o) = r.outcomes.get(0) {
@@ -41,7 +65,7 @@ fn focus_nth(windows: &VecDeque<i64>, n: usize) -> Result<(), Box<dyn Error>> {
     Err(From::from(format!("Last {}nth window unavailable", n)))
 }
 
-fn cmd_server(windows: Arc<Mutex<VecDeque<i64>>>) {
+fn cmd_server(windows: Arc<Mutex<VecDeque<Window>>>) {
     let socket = {
         let mut base = match env::var("XDG_RUNTIME_DIR") {
             Ok(path) => PathBuf::from(path),
@@ -73,16 +97,28 @@ fn cmd_server(windows: Arc<Mutex<VecDeque<i64>>>) {
             let windows = windows.clone();
 
             thread::spawn(move || {
-                for line in BufReader::new(stream.try_clone().unwrap()).lines() {
-                    match line {
-                        Ok(line) if line.as_bytes() == SWITCH_COMMAND => {
-                            let winc = windows.lock().unwrap();
-                            let _ = focus_nth(&winc, 1);
-                            let _ = stream.write_all(b"Done\n");
-                        }
-                        _ => {
-                            let _ = stream.write_all(b"Invalid command\n");
-                        }
+                let mut reader = BufReader::new(stream.try_clone().unwrap()).lines();
+                let line = reader.next();
+                match line {
+                    Some(Ok(line)) if line.as_bytes() == SWITCH_COMMAND => {
+                        let mut winc = windows.lock().unwrap();
+
+                        // Ignore MIN_FOCUS if we alternate focus between two
+                        // windows
+                        winc.front_mut()
+                            .iter_mut()
+                            .for_each(|win| win.just_switched = true);
+
+                        let _ = focus_nth(&winc, 1);
+                    }
+
+                    Some(Ok(line)) if line.as_bytes() == DEBUG_COMMAND => {
+                        let winc = windows.lock().unwrap();
+                        let _ = write!(&mut stream, "{:#?}\n", winc);
+                    }
+
+                    _ => {
+                        let _ = stream.write_all(b"Invalid command\n");
                     }
                 }
             });
@@ -116,8 +152,7 @@ fn focus_server() {
     get_focused_window()
         .map(|wid| {
             let mut windows = windows.lock().unwrap();
-
-            windows.push_front(wid);
+            windows.push_front(Window::new(wid));
         })
         .ok();
 
@@ -133,9 +168,17 @@ fn focus_server() {
                 if let WindowChange::Focus = e.change {
                     let mut windows = windows.lock().unwrap();
 
+                    if let Some(win) = windows.front_mut() {
+                        if !mem::replace(&mut win.just_switched, false) {
+                            if win.focused.elapsed() < MIN_FOCUS {
+                                let _ = windows.pop_front();
+                            }
+                        }
+                    }
+
                     // dedupe, push front and truncate
-                    windows.retain(|v| *v != e.container.id);
-                    windows.push_front(e.container.id);
+                    windows.retain(|v| v.id != e.container.id);
+                    windows.push_front(Window::new(e.container.id));
                     windows.truncate(BUFFER_SIZE);
                 }
             }
@@ -144,11 +187,12 @@ fn focus_server() {
     }
 }
 
-fn focus_client() {
+fn focus_client(command: &str) {
     let socket_path = xprop::get(SOCKET_PATH_PROP).expect("Get xprop");
     let mut stream = UnixStream::connect(socket_path).unwrap();
 
-    stream.write_all(SWITCH_COMMAND).expect("Write to socket");
+    write!(&mut stream, "{}\n", command).expect("Write to socket");
+    io::copy(&mut stream, &mut io::stdout().lock()).expect("Copy server output");
 }
 
 fn main() {
@@ -156,11 +200,11 @@ fn main() {
         Some(arg) if arg == "server" => {
             focus_server();
         }
-        Some(arg) if arg == "switch" => {
-            focus_client();
+        Some(arg) => {
+            focus_client(&arg);
         }
         _ => {
-            eprintln!("Expected argument: server or switch");
+            eprintln!("Expected argument: server, switch, debug");
         }
     }
 }
