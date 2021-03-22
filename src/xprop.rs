@@ -1,6 +1,7 @@
 use xcb::ffi::base::xcb_generic_error_t;
+use xcb::Atom;
 
-pub fn init(property: &str) -> (xcb::base::Connection, u32, u32) {
+pub fn init(property: &str) -> (xcb::base::Connection, Atom, Atom) {
     let (conn, screen_num) = xcb::Connection::connect(None).unwrap();
     let setup = conn.get_setup();
     let screen = setup.roots().nth(screen_num as usize).unwrap();
