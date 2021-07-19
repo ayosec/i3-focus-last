@@ -145,8 +145,6 @@ fn focus_server() {
 
                     last_change = Instant::now();
 
-                    // dedupe, push front and truncate
-                    windows.retain(|&id| id != e.container.id);
                     windows.push_front(e.container.id);
                     windows.truncate(BUFFER_SIZE);
                 }
