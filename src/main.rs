@@ -18,7 +18,7 @@ mod xprop;
 /// Min. time with focus required to keep a window in the queue.
 const MIN_FOCUS: Duration = Duration::from_millis(300);
 
-static BUFFER_SIZE: usize = 100;
+static BUFFER_SIZE: usize = 64;
 
 const SOCKET_PATH_PROP: &str = "_I3_ALTERNATE_FOCUS_SOCKET";
 
@@ -145,8 +145,11 @@ fn focus_server() {
 
                     last_change = Instant::now();
 
-                    windows.push_front(e.container.id);
-                    windows.truncate(BUFFER_SIZE);
+                    let cid = e.container.id;
+                    if windows.front().copied() != Some(cid) {
+                        windows.push_front(cid);
+                        windows.truncate(BUFFER_SIZE);
+                    }
                 }
             }
             _ => unreachable!(),
