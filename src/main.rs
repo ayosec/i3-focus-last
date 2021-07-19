@@ -73,30 +73,28 @@ fn cmd_server(windows: Arc<Mutex<VecDeque<i64>>>) {
     // Listen to client commands
     let listener = UnixListener::bind(socket).unwrap();
 
-    for stream in listener.incoming() {
-        if let Ok(mut stream) = stream {
-            let windows = windows.clone();
+    for mut stream in listener.incoming().flatten() {
+        let windows = windows.clone();
 
-            thread::spawn(move || {
-                let mut reader = BufReader::new(stream.try_clone().unwrap()).lines();
-                let line = reader.next();
-                match line {
-                    Some(Ok(line)) if line.as_bytes() == SWITCH_COMMAND => {
-                        let winc = windows.lock().unwrap();
-                        let _ = focus_nth(&winc, 1);
-                    }
-
-                    Some(Ok(line)) if line.as_bytes() == DEBUG_COMMAND => {
-                        let winc = windows.lock().unwrap();
-                        let _ = writeln!(&mut stream, "{:#?}", winc);
-                    }
-
-                    _ => {
-                        let _ = stream.write_all(b"Invalid command\n");
-                    }
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stream.try_clone().unwrap()).lines();
+            let line = reader.next();
+            match line {
+                Some(Ok(line)) if line.as_bytes() == SWITCH_COMMAND => {
+                    let winc = windows.lock().unwrap();
+                    let _ = focus_nth(&winc, 1);
                 }
-            });
-        }
+
+                Some(Ok(line)) if line.as_bytes() == DEBUG_COMMAND => {
+                    let winc = windows.lock().unwrap();
+                    let _ = writeln!(&mut stream, "{:#?}", winc);
+                }
+
+                _ => {
+                    let _ = stream.write_all(b"Invalid command\n");
+                }
+            }
+        });
     }
 }
 
