@@ -1,6 +1,6 @@
 [package]
 name = "i3-alternate-focus"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["lbonn", "ayosec"]
 description = "Focus last window on i3"
 license = "MIT"
