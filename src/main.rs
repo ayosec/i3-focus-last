@@ -16,7 +16,7 @@ use i3ipc::{I3Connection, I3EventListener, Subscription};
 mod xprop;
 
 /// Min. time with focus required to keep a window in the queue.
-const MIN_FOCUS: Duration = Duration::from_millis(300);
+const MIN_FOCUS: Duration = Duration::from_secs(1);
 
 static BUFFER_SIZE: usize = 64;
 
@@ -24,6 +24,13 @@ const SOCKET_PATH_PROP: &str = "_I3_ALTERNATE_FOCUS_SOCKET";
 
 const SWITCH_COMMAND: &[u8] = b"switch";
 const DEBUG_COMMAND: &[u8] = b"debug";
+
+#[derive(Default, Debug)]
+struct State {
+    windows: VecDeque<i64>,
+
+    focus_after_switch: bool,
+}
 
 fn focus_nth(windows: &VecDeque<i64>, n: usize) -> Result<(), Box<dyn Error>> {
     let mut conn = I3Connection::connect().unwrap();
@@ -46,7 +53,7 @@ fn focus_nth(windows: &VecDeque<i64>, n: usize) -> Result<(), Box<dyn Error>> {
     Err(From::from(format!("Last {}nth window unavailable", n)))
 }
 
-fn cmd_server(windows: Arc<Mutex<VecDeque<i64>>>) {
+fn cmd_server(state: Arc<Mutex<State>>) {
     let socket = {
         let mut base = match env::var("XDG_RUNTIME_DIR") {
             Ok(path) => PathBuf::from(path),
@@ -74,20 +81,21 @@ fn cmd_server(windows: Arc<Mutex<VecDeque<i64>>>) {
     let listener = UnixListener::bind(socket).unwrap();
 
     for mut stream in listener.incoming().flatten() {
-        let windows = windows.clone();
+        let state = state.clone();
 
         thread::spawn(move || {
             let mut reader = BufReader::new(stream.try_clone().unwrap()).lines();
             let line = reader.next();
             match line {
                 Some(Ok(line)) if line.as_bytes() == SWITCH_COMMAND => {
-                    let winc = windows.lock().unwrap();
-                    let _ = focus_nth(&winc, 1);
+                    let mut state = state.lock().unwrap();
+                    state.focus_after_switch = true;
+                    let _ = focus_nth(&state.windows, 1);
                 }
 
                 Some(Ok(line)) if line.as_bytes() == DEBUG_COMMAND => {
-                    let winc = windows.lock().unwrap();
-                    let _ = writeln!(&mut stream, "{:#?}", winc);
+                    let state = state.lock().unwrap();
+                    let _ = writeln!(&mut stream, "{:#?}", state);
                 }
 
                 _ => {
@@ -112,18 +120,18 @@ fn get_focused_window() -> Result<i64, ()> {
 
 fn focus_server() {
     let mut listener = I3EventListener::connect().unwrap();
-    let windows = Arc::new(Mutex::new(VecDeque::new()));
-    let windowsc = Arc::clone(&windows);
+    let state = Arc::new(Mutex::new(State::default()));
+    let state2 = Arc::clone(&state);
 
     // Add the current focused window to bootstrap the list
     get_focused_window()
         .map(|wid| {
-            let mut windows = windows.lock().unwrap();
-            windows.push_front(wid);
+            let mut state = state.lock().unwrap();
+            state.windows.push_front(wid);
         })
         .ok();
 
-    thread::spawn(|| cmd_server(windowsc));
+    thread::spawn(|| cmd_server(state2));
 
     // Listens to i3 event
     let subs = [Subscription::Window];
@@ -135,20 +143,22 @@ fn focus_server() {
         match event.unwrap() {
             Event::WindowEvent(e) => {
                 if let WindowChange::Focus = e.change {
-                    let mut windows = windows.lock().unwrap();
+                    let mut state = state.lock().unwrap();
 
                     // Ignore last window if it had focus for less than
                     // MIN_FOCUS
-                    if last_change.elapsed() < MIN_FOCUS {
-                        windows.pop_front();
+                    if !std::mem::take(&mut state.focus_after_switch)
+                        && last_change.elapsed() < MIN_FOCUS
+                    {
+                        state.windows.pop_front();
                     }
 
                     last_change = Instant::now();
 
                     let cid = e.container.id;
-                    if windows.front().copied() != Some(cid) {
-                        windows.push_front(cid);
-                        windows.truncate(BUFFER_SIZE);
+                    if state.windows.front().copied() != Some(cid) {
+                        state.windows.push_front(cid);
+                        state.windows.truncate(BUFFER_SIZE);
                     }
                 }
             }
