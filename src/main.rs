@@ -140,9 +140,9 @@ fn focus_server() {
     let mut last_change = Instant::now();
 
     for event in listener.listen() {
-        match event.unwrap() {
-            Event::WindowEvent(e) => {
-                if let WindowChange::Focus = e.change {
+        if let Event::WindowEvent(e) = event.unwrap() {
+            match e.change {
+                WindowChange::Focus => {
                     let mut state = state.lock().unwrap();
 
                     // Ignore last window if it had focus for less than
@@ -161,8 +161,17 @@ fn focus_server() {
                         state.windows.truncate(BUFFER_SIZE);
                     }
                 }
+
+                WindowChange::Close => {
+                    state
+                        .lock()
+                        .unwrap()
+                        .windows
+                        .retain(|v| *v != e.container.id);
+                }
+
+                _ => (),
             }
-            _ => unreachable!(),
         }
     }
 }
