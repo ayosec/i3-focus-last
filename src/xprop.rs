@@ -1,44 +1,50 @@
-use xcb::ffi::base::xcb_generic_error_t;
-use xcb::Atom;
+use xcb::x;
 
-pub fn init(property: &str) -> (xcb::base::Connection, Atom, Atom) {
+pub fn init(property: &str) -> (xcb::Connection, x::Window, x::Atom) {
     let (conn, screen_num) = xcb::Connection::connect(None).unwrap();
     let setup = conn.get_setup();
     let screen = setup.roots().nth(screen_num as usize).unwrap();
     let root = screen.root();
 
-    let atom = xcb::xproto::intern_atom(&conn, false, property)
-        .get_reply()
-        .unwrap()
-        .atom();
+    let req = conn.send_request(&x::InternAtom {
+        only_if_exists: false,
+        name: property.as_bytes(),
+    });
+
+    let atom = conn.wait_for_reply(req).unwrap().atom();
 
     (conn, root, atom)
 }
 
-pub fn set(property: &str, value: &str) -> Result<(), xcb::base::Error<xcb_generic_error_t>> {
+pub fn set(property: &str, value: &str) -> Result<(), xcb::Error> {
     let (conn, root, atom) = init(property);
 
-    xcb::change_property(
-        &conn,
-        xcb::PROP_MODE_REPLACE as u8,
-        root,
-        atom,
-        xcb::ATOM_STRING,
-        8,
-        value.as_bytes(),
-    )
-    .request_check()?;
+    let req = conn.send_request_checked(&x::ChangeProperty {
+        mode: x::PropMode::Replace,
+        window: root,
+        property: atom,
+        r#type: x::ATOM_STRING,
+        data: value.as_bytes(),
+    });
 
+    conn.check_request(req)?;
     Ok(())
 }
 
-pub fn get(property: &str) -> Result<String, xcb::base::Error<xcb_generic_error_t>> {
+pub fn get(property: &str) -> Result<String, xcb::Error> {
     let (conn, root, atom) = init(property);
 
-    let reply =
-        xcb::get_property(&conn, false, root, atom, xcb::ATOM_STRING, 0, 1024).get_reply()?;
+    let req = conn.send_request(&x::GetProperty {
+        delete: false,
+        window: root,
+        property: atom,
+        r#type: x::ATOM_STRING,
+        long_offset: 0,
+        long_length: 1024,
+    });
 
-    Ok(std::str::from_utf8(reply.value::<u8>())
+    let reply = conn.wait_for_reply(req)?;
+    Ok(std::str::from_utf8(reply.value())
         .expect("Value in xprop")
         .to_string())
 }
