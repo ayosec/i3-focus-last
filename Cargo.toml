@@ -1,12 +1,12 @@
 [package]
-name = "i3-alternate-focus"
-version = "0.2.5"
+name = "x11-alternate-focus"
+version = "0.3.0"
 authors = ["lbonn", "ayosec"]
 description = "Focus last window on i3"
 license = "MIT"
-repository = "https://github.com/ayosec/i3-focus-last"
+repository = "https://github.com/ayosec/x11-alternate-focus"
 edition = "2021"
 
 [dependencies]
-i3ipc = "0.10.0"
-xcb = "1.4.0"
+tokio = { version = "1.40.0", features = ["macros", "net", "rt", "sync"] }
+xcb = { version = "1.4.0", features = ["xkb"] }
